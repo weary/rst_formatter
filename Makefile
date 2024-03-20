@@ -17,3 +17,7 @@ clean:
 
 format: .venv/init
 	.venv/bin/python rst_formatter.py
+
+test: .venv/init
+	.venv/bin/pytest .
+
