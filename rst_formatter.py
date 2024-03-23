@@ -74,17 +74,24 @@ class RstParser(Parser):
 
         super().__init__(rfc2822=False, inliner=inliner)
 
+    def get_transforms(self) -> list[Any]:
+        """Suppress transforms."""
+        return []
+
 
 class RstTranslator(nodes.NodeVisitor):
     """Visitor that will format rst according to a given configuration."""
 
     ignored_nodes = (nodes.document,)  # nodes that have no equivalent in rst
-    non_breakable_nodes: ClassVar[dict[type, tuple[str, str]]] = {
-        nodes.strong: ("**", "**"),
-        nodes.emphasis: ("*", "*"),
-        NoLineBreakNode: ("", ""),
-        nodes.reference: ("`", "`_"),
-        nodes.target: ("_`", "`"),
+
+    # nodes that are not re-formatted
+    non_breakable_nodes: ClassVar[set[type]] = {
+        nodes.citation_reference,
+        nodes.emphasis,
+        nodes.reference,
+        nodes.strong,
+        nodes.target,
+        NoLineBreakNode,
     }
 
     def __init__(self, document: nodes.document, config: RstFormatterConfig) -> None:
@@ -144,8 +151,27 @@ class RstTranslator(nodes.NodeVisitor):
         """Return outer level of hold space, joined on join_char."""
         return join_char.join(self.hold_space.pop())
 
+    def append_possible_newline(self) -> None:
+        if self.need_newline_before_paragraph_start:
+            self.append(newlines=1)
+            self.need_newline_before_paragraph_start = False
+
     def escape(self, inp: str) -> str:
         return inp
+
+    def visit_target(self, node: nodes.target) -> None:
+        self.enter_nonbreakable_element()
+
+    def depart_target(self, node: nodes.target) -> None:
+        # targets are documented as 'invisible', but if they are a hyperlink target or have children they must be
+        # rendered anyway
+        self.exit_nonbreakable_element()
+        if node.rawsource.startswith(".. _"):
+            self.append_possible_newline()
+            self.append([node.rawsource], newlines=1)
+            self.need_newline_before_paragraph_start = True
+        elif node.children:
+            self.append([node.rawsource])
 
     def visit_section(self, _node: nodes.section) -> None:
         self.section_depth += 1
@@ -154,6 +180,7 @@ class RstTranslator(nodes.NodeVisitor):
         self.section_depth -= 1
 
     def visit_title(self, _node: nodes.title) -> None:
+        self.append_possible_newline()
         self.enter_nonbreakable_element()
 
     def depart_title(self, _node: nodes.title) -> None:
@@ -170,9 +197,7 @@ class RstTranslator(nodes.NodeVisitor):
             self.need_newline_before_paragraph_start = True
 
     def visit_paragraph(self, _node: nodes.paragraph) -> None:
-        if self.need_newline_before_paragraph_start:
-            self.append(newlines=1)
-            self.need_newline_before_paragraph_start = False
+        self.append_possible_newline()
 
     def depart_paragraph(self, _node: nodes.paragraph) -> None:
         self.append(newlines=1)  # end the current sentence
@@ -201,6 +226,20 @@ class RstTranslator(nodes.NodeVisitor):
     def depart_list_item(self, _node: nodes.list_item) -> None:
         self.indent_level -= 1
 
+    def visit_citation(self, node: nodes.citation) -> None:
+        self.append_possible_newline()
+        self.append([f".."])
+
+    def depart_citation(self, node: nodes.citation) -> None:
+        self.need_newline_before_paragraph_start = True
+
+    def visit_label(self, node: nodes.label) -> None:
+        self.enter_nonbreakable_element()
+
+    def depart_label(self, node: nodes.label) -> None:
+        text = self.exit_nonbreakable_element()
+        self.append([f"[{text}]"])
+
     def visit_system_message(self, _node: nodes.system_message) -> None:
         raise nodes.SkipChildren
 
@@ -208,10 +247,8 @@ class RstTranslator(nodes.NodeVisitor):
         pass
 
     def visit_DirectivePlaceholder(self, node: DirectivePlaceholder) -> None:
+        self.append_possible_newline()
         assert self.line_length == 0
-        if self.need_newline_before_paragraph_start:
-            self.append(newlines=1)
-            self.need_newline_before_paragraph_start = False
         self.append([f".. {node.name}::"] + node.arguments, newlines=1)
         self.indent_level += 1
         for key, value in sorted(node.options.items()):
@@ -242,10 +279,9 @@ class RstTranslator(nodes.NodeVisitor):
         if isinstance(node, self.ignored_nodes):
             return
 
-        non_breakable = self.non_breakable_nodes.get(type(node))
-        if non_breakable is not None:
-            text = self.exit_nonbreakable_element()
-            self.append([f"{non_breakable[0]}{text}{non_breakable[1]}"])
+        if type(node) in self.non_breakable_nodes:
+            self.exit_nonbreakable_element()
+            self.append([node.rawsource])
             return
 
         print(f"Unknown departure {type(node)}")
@@ -379,11 +415,7 @@ def main() -> int:
     parser.add_argument("--silent", "-s", action="store_true", help="Run in silent mode")
     args = parser.parse_args()
 
-    try:
-        rst_file = Path(sys.argv[1])
-    except IndexError:
-        print("Specify inputfile!")
-        return -1
+    rst_file = args.input_file
     content = rst_file.read_text()
     out = format_rst(content)
 

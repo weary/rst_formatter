@@ -46,6 +46,35 @@ some text.
         assert exp == act
 
 
+def test_consecutive_headings():
+    input_text = """
+====
+Heading1
+====
+Heading2
+====
+Heading3
+----
+Heading4
+^^^^
+"""
+    expected_output = """
+========
+Heading1
+========
+
+Heading2
+========
+
+Heading3
+--------
+Heading4
+^^^^^^^^
+""".strip()
+    actual_output = format_rst(input_text)
+    assert actual_output == expected_output
+
+
 def test_rst_multiline_title():
     config = RstFormatterConfig()
     input_text = """
@@ -145,7 +174,6 @@ def test_inline_markup():
 _`some official ref` is here, _`official ref` as well.
     """.strip()
     actual_text = format_rst(input_text)
-    print_unified_diff(actual_text, input_text)
     assert actual_text == input_text
 
 
@@ -184,9 +212,6 @@ Bla
 Remainder
     """.strip()
     actual_text = format_rst(input_text)
-    # print_with_line_numbers("input", input_text)
-    # print_with_line_numbers("actual", actual_text)
-    # print_unified_diff(input_text, actual_text)
     assert actual_text == input_text
 
 
@@ -206,8 +231,36 @@ Remainder
     """.strip()
 
     actual_text = format_rst(input_text)
-    print_with_line_numbers("input", input_text)
-    print_with_line_numbers("actual", actual_text)
-    print_with_line_numbers("expected", expected_text)
-    print_unified_diff(input_text, actual_text)
     assert actual_text == expected_text
+
+
+def test_reference():
+    input_text = """
+Chapter 1
+=========
+
+My *favorite* language is Python_.
+
+.. _Python: https://www.python.org/
+
+Continue reading in `Somewhere <Chapter 4>`_.
+
+`Chapter 1`_ describes something
+
+L1: `Something Else <something.other>`_ is outside this document.
+
+L2: `something.other`_ is outside this document.
+
+Lorem ipsum [Ref]_ dolor sit amet.
+
+.. [Ref] Book or article reference, URL or whatever.
+
+Chapter 4
+=========
+
+Bla
+""".strip()
+
+    config = RstFormatterConfig(title_order=["="])
+    actual_text = format_rst(input_text, config)
+    assert actual_text == input_text
