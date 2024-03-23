@@ -1,17 +1,19 @@
-from pathlib import Path
+import argparse
 import re
+import sys
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from difflib import unified_diff
-import sys
+from pathlib import Path
 from typing import Any, ClassVar
 
 from docutils import io, nodes, writers
 from docutils.core import publish_doctree, publish_from_doctree
 from docutils.parsers.rst import Directive, Parser, directives
-from docutils.parsers.rst.states import Inliner
+from docutils.parsers.rst.states import Body, Inliner
 from docutils.readers.standalone import Reader
+from docutils.statemachine import StringList
 
 
 @dataclass
@@ -46,20 +48,6 @@ class NoLineBreakNode(nodes.Inline, nodes.TextElement):
 class DirectivePlaceholder(Directive, nodes.Node):
     """Special node used for any directives found."""
 
-    class AllowAllOptions:
-        """Option specification so we support all (possible) options."""
-
-        def __bool__(self) -> bool:
-            """Yes, we support options."""
-            return True
-
-        def __getitem__(self, _key: str) -> object:
-            """Return conversion function for any key."""
-            return lambda x: x
-
-    has_content = True  # can have content
-    optional_arguments = 999
-    option_spec = AllowAllOptions()
     children = ()
 
     def run(self) -> list[nodes.Node]:
@@ -68,7 +56,7 @@ class DirectivePlaceholder(Directive, nodes.Node):
 
     def pformat(self, indent: str = "    ", level: int = 0) -> str:
         """For formatted print."""
-        return f"{indent * level}Directive {self.name}\n"
+        return f"{indent * level}Directive {self.name}"
 
 
 class RstParser(Parser):
@@ -221,19 +209,24 @@ class RstTranslator(nodes.NodeVisitor):
 
     def visit_DirectivePlaceholder(self, node: DirectivePlaceholder) -> None:
         assert self.line_length == 0
+        if self.need_newline_before_paragraph_start:
+            self.append(newlines=1)
+            self.need_newline_before_paragraph_start = False
         self.append([f".. {node.name}::"] + node.arguments, newlines=1)
         self.indent_level += 1
         for key, value in sorted(node.options.items()):
             self.append([f":{key}:", value], newlines=1)
 
-        if node.options or node.content:
+        if node.options and node.content:
             self.append(newlines=1)
 
-        if node.content:
-            self.append(list(node.content), newlines=1)
+        for line in node.content:
+            self.append([line], newlines=1)
 
     def depart_DirectivePlaceholder(self, _node: DirectivePlaceholder) -> None:
         self.indent_level -= 1
+        self.need_newline_before_paragraph_start = True
+        # self.append(newlines=1)  # always a blank line after a directive
 
     def unknown_visit(self, node: nodes.Node) -> None:
         if isinstance(node, self.ignored_nodes):
@@ -269,6 +262,34 @@ class RstFormattingWriter(writers.Writer):
         self.output = "".join(visitor.output)
 
 
+def forgiving_parse_directive_block(
+    self: Body, indented: StringList, line_offset: int, _directive: type, _option_presets: dict
+) -> tuple[list[str], dict[str, str], StringList, int]:
+    """Parse a directive without accessing the directive."""
+    # indented[0] is the list of arguments after the directive name
+    arguments: list[str] = indented[0].strip().split()
+    indented.trim_start()  # skip arguments
+
+    options: dict[str, str] = {}
+    option_regex = self.patterns["field_marker"]
+    while indented:
+        option_match = option_regex.match(indented[0])
+        if not option_match:
+            break
+        key = option_match.group()  # including ':'
+        value = indented[0][len(key) :]
+        options[key[1:-2]] = value
+        indented.trim_start()
+
+    while indented and len(indented[-1].strip()) == 0:
+        indented.trim_end()
+
+    if indented and len(indented[0].strip()) == 0:
+        indented.trim_start()  # blank line between options and content
+
+    return arguments, options, indented, indented.parent_offset
+
+
 @contextmanager
 def monkeypatch_directives_handler() -> Generator[None, Any, None]:
     """Make sure that all directives in the rst are stored."""
@@ -281,14 +302,22 @@ def monkeypatch_directives_handler() -> Generator[None, Any, None]:
             return DirectivePlaceholder
 
     old_directive_handler = directives._directives  # noqa: SLF001
+    old_directive_parser = Body.parse_directive_block
     directives._directives = MonkeyPatchedDirectiveHandler()  # noqa: SLF001
+    Body.parse_directive_block = forgiving_parse_directive_block
     try:
         yield
     finally:
         directives._directives = old_directive_handler  # noqa: SLF001
+        Body.parse_directive_block = old_directive_parser
 
 
-def fix_multiline_headings(input_rst: str, config: RstFormatterConfig) -> str:
+def fix_heading_line_length(input_rst: str, config: RstFormatterConfig) -> str:
+    """
+    Fix heading line length.
+
+    Replace every line consisting 3-or-more heading-characters with exactly 4 heading characters.
+    """
     chars = "".join(set("".join(config.title_order))).replace("^", "\\^").replace("-", "\\-")
     regex_str = r"^([CHARS]){3,}$".replace("CHARS", chars)
     compiled_regex = re.compile(regex_str, flags=re.MULTILINE)
@@ -301,9 +330,12 @@ def format_rst(input_rst: str, config: RstFormatterConfig | None = None) -> str:
         config = RstFormatterConfig()
 
     if config.no_newline_bulletlist:
-        input_rst = input_rst.replace(":\n-", ":\n\n-")
+        input_rst = re.sub(r":\n(\s*[-*] )", r":\n\n\1", input_rst)
 
-    input_rst = fix_multiline_headings(input_rst, config)
+    # fix case of forgetting a newline before a directive
+    input_rst = re.sub(r"([^\n])(\n.. )", r"\1\n\2", input_rst)
+
+    input_rst = fix_heading_line_length(input_rst, config)
 
     settings_overrides: dict[str, Any] = {
         "doctitle_xform": False,
@@ -334,17 +366,19 @@ def format_rst(input_rst: str, config: RstFormatterConfig | None = None) -> str:
         )
 
     if config.no_newline_bulletlist:
-        out = out.replace(":\n\n-", ":\n-")
+        out = re.sub(r":\n\n(\s*[-*] )", r":\n\1", out)
     return out.lstrip("\n").rstrip("\n")
-
-
-test_document = """
-
-"""
 
 
 def main() -> int:
     """Entrypoint."""
+    parser = argparse.ArgumentParser(description="Tool for formatting an rst file")
+    parser.add_argument("input_file", type=Path, help="Input file to be processed")
+    parser.add_argument("--check", "-c", action="store_true", help="Return 0 if no changes are needed")
+    parser.add_argument("--diff", "-d", action="store_true", help="Perform a diff operation")
+    parser.add_argument("--silent", "-s", action="store_true", help="Run in silent mode")
+    args = parser.parse_args()
+
     try:
         rst_file = Path(sys.argv[1])
     except IndexError:
@@ -353,13 +387,27 @@ def main() -> int:
     content = rst_file.read_text()
     out = format_rst(content)
 
-    def generate_unified_diff(str1: str, str2: str) -> str:
-        diff = list(unified_diff(str1.splitlines(), str2.splitlines(), lineterm=""))
-        return "\n".join(diff)
+    def print_if_not_silent(arg: str) -> None:
+        if not args.silent:
+            print(arg)
 
-    print(generate_unified_diff(content, out))
-    return content == out
+    if content == out:
+        print_if_not_silent("Nothing changed")
+        return 0
+
+    if args.diff:
+        diff = list(unified_diff(content.splitlines(), out.splitlines(), lineterm=""))
+        print_if_not_silent("\n".join(diff))
+        return 1
+
+    if not args.check:
+        print_if_not_silent(f"Writing changes to '{rst_file}'")
+        rst_file.write_text(out)
+    else:
+        print_if_not_silent("File changed (but file left unchanged)")
+
+    return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

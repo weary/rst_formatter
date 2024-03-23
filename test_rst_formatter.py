@@ -2,12 +2,19 @@ from difflib import unified_diff
 
 import pytest  # noqa: F401
 
-from rst_formatter import RstFormatterConfig, fix_multiline_headings, format_rst
+from rst_formatter import RstFormatterConfig, fix_heading_line_length, format_rst
 
 
 def print_unified_diff(left: str, right: str) -> None:
     diff = list(unified_diff(left.splitlines(), right.splitlines(), lineterm=""))
     print("\n".join(diff))
+
+
+def print_with_line_numbers(name: str, content: str) -> None:
+    print(f"content of {name}:")
+    for idx, line in enumerate(content.split("\n")):
+        print(f"{idx+1:3}: '{line}'")
+    print()
 
 
 def test_simple_text():
@@ -35,7 +42,7 @@ some text.
     for testchar in ("-", "=", "^"):
         inp = input_text.replace("-", testchar)
         exp = expected_output.replace("-", testchar)
-        act = fix_multiline_headings(inp, config=RstFormatterConfig())
+        act = fix_heading_line_length(inp, config=RstFormatterConfig())
         assert exp == act
 
 
@@ -57,10 +64,6 @@ some text.
 """.strip()
 
     actual_output1 = format_rst(input_text, config=config)
-    if actual_output1 != expected_output1:
-        print("XXX test 1:")
-        print("actual:\n" + actual_output1)
-        print("\n\nexpected:" + expected_output1)
     assert actual_output1 == expected_output1
 
     config.newline_after_title = -1
@@ -150,19 +153,61 @@ def test_directives():
     input_text = """
 
 .. some_directive_with_content::
-
   macro content
+
 .. directive_with_args_on_line:: some_arg other_arg
-.. directive_with_named_args::
+
+.. directive_with_named_args_and_no_content::
   :arg: frut
 
 .. directive_with_named_args_and_content::
   :arg: frut
 
   content
+
 no content
+
+Known directive:
+
+.. csv-table:: tablename
+  :header: "header 1", "header 2"
+  :widths: 30, 100
+
+  col1, col2
+
+Bla
+
+.. somedirective_without_arguments_and_no_blank_line::
+  line 1
+  line 2
+
+Remainder
     """.strip()
     actual_text = format_rst(input_text)
-    print("actual:\n" + actual_text + "\n")
-    print_unified_diff(actual_text, input_text)
+    # print_with_line_numbers("input", input_text)
+    # print_with_line_numbers("actual", actual_text)
+    # print_unified_diff(input_text, actual_text)
     assert actual_text == input_text
+
+
+def test_directives_short():
+    input_text = """
+Bla
+.. directive_without_leading_newline::
+Remainder
+    """.strip()
+
+    expected_text = """
+Bla
+
+.. directive_without_leading_newline::
+
+Remainder
+    """.strip()
+
+    actual_text = format_rst(input_text)
+    print_with_line_numbers("input", input_text)
+    print_with_line_numbers("actual", actual_text)
+    print_with_line_numbers("expected", expected_text)
+    print_unified_diff(input_text, actual_text)
+    assert actual_text == expected_text
