@@ -10,9 +10,7 @@ clean:
 .venv/init:
 	python3 -m venv .venv
 	.venv/bin/pip install -U pip setuptools wheel
-	.venv/bin/pip install docutils lxml lxml-stubs rst2pdf
-	.venv/bin/pip install rstcheck mypy ruff typeguard pytest
-	.venv/bin/pip install ipdb
+	.venv/bin/pip install -e .[dev,test]
 	touch ./.venv/init
 
 format: .venv/init

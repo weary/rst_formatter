@@ -1,19 +1,26 @@
+"""Re-format rst files."""
+
+from __future__ import annotations
+
 import argparse
 import re
 import sys
-from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from difflib import unified_diff
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from docutils import io, nodes, writers
 from docutils.core import publish_doctree, publish_from_doctree
 from docutils.parsers.rst import Directive, Parser, directives
 from docutils.parsers.rst.states import Body, Inliner
 from docutils.readers.standalone import Reader
-from docutils.statemachine import StringList
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
+
+    from docutils.statemachine import StringList
 
 
 @dataclass
@@ -31,18 +38,41 @@ class RstFormatterConfig:
     # add a newline after the title line if the heading is less than:
     newline_after_title: int = 2
 
-    # no newline after ':' in a bulletlist
-    no_newline_bulletlist = True
+    # newline after ':' in a bullet list, rst specifies that a newline is needed before the first item
+    newline_bullet_list: bool = False
+
+    # for development, print the intermediate docutils node tree
+    print_node_tree: bool = False
+
+    @staticmethod
+    def prepare_argparse(parser: argparse.ArgumentParser) -> None:
+        """Add arguments corresponding to settings above."""
+        parser.add_argument("--max_line_length", type=int, default=120, help="Maximum line length")
+        parser.add_argument(
+            "--no_line_break", nargs="+", default=[r"~[^~]*~"], help="Regex patterns that should not be broken"
+        )
+        parser.add_argument("--titles", nargs="+", default=["==", "=", "-", "^"], help="Title formatting characters")
+        parser.add_argument("--newline_after_title", type=int, default=2, help="Add newline after major headings")
+        parser.add_argument("--newline_bullet_list", action="store_true", help='Add newline after ":" in a bullet list')
+        parser.add_argument("--print-parse-tree", action="store_true", help=argparse.SUPPRESS)
+
+    @staticmethod
+    def parse_argparse(args: argparse.Namespace) -> RstFormatterConfig:
+        """Convert the parsed arguments to a RstFormatterConfig."""
+        config = RstFormatterConfig()
+        config.max_line_length = args.max_line_length
+        if args.no_line_break:
+            config.no_line_break_regexes = [re.compile(pattern) for pattern in args.no_line_break]
+        if args.titles:
+            config.title_order = args.titles
+        config.newline_after_title = args.newline_after_title
+        config.newline_bullet_list = args.newline_bullet_list
+        config.print_node_tree = args.print_parse_tree
+        return config
 
 
 class NoLineBreakNode(nodes.Inline, nodes.TextElement):
     """Special formatting node that does nothing except prevent line breaks inside."""
-
-    def __init__(self, text: str) -> None:
-        super().__init__(text=text)
-
-    def pformat(self, indent: str = "    ", level: int = 0):
-        return f"{indent * level}NoLineBreak\n"
 
 
 class DirectivePlaceholder(Directive, nodes.Node):
@@ -56,7 +86,7 @@ class DirectivePlaceholder(Directive, nodes.Node):
 
     def pformat(self, indent: str = "    ", level: int = 0) -> str:
         """For formatted print."""
-        return f"{indent * level}Directive {self.name}"
+        return f"{indent * level}Directive {self.name}\n"
 
 
 class RstParser(Parser):
@@ -82,7 +112,7 @@ class RstParser(Parser):
 class RstTranslator(nodes.NodeVisitor):
     """Visitor that will format rst according to a given configuration."""
 
-    ignored_nodes = (nodes.document,)  # nodes that have no equivalent in rst
+    ignored_nodes = (nodes.document, nodes.transition)  # nodes that have no equivalent in rst
 
     # nodes that are not re-formatted
     non_breakable_nodes: ClassVar[set[type]] = {
@@ -139,7 +169,8 @@ class RstTranslator(nodes.NodeVisitor):
                 self.output.append("\n" * newlines)
                 self.line_length = 0
         else:
-            assert newlines == 0  # not supported, not sure if we want to add newlines to the hold-space
+            if newlines != 0:
+                raise NotImplementedError  # not supported, not sure if we want to add newlines to the hold-space
             if text:
                 self.hold_space[-1].extend(text)
 
@@ -152,19 +183,22 @@ class RstTranslator(nodes.NodeVisitor):
         return join_char.join(self.hold_space.pop())
 
     def append_possible_newline(self) -> None:
+        """Emit a newline if the previous node requested it."""
         if self.need_newline_before_paragraph_start:
             self.append(newlines=1)
             self.need_newline_before_paragraph_start = False
 
-    def escape(self, inp: str) -> str:
-        return inp
-
-    def visit_target(self, node: nodes.target) -> None:
+    def visit_target(self, _node: nodes.target) -> None:
+        """Link-target."""
         self.enter_nonbreakable_element()
 
     def depart_target(self, node: nodes.target) -> None:
-        # targets are documented as 'invisible', but if they are a hyperlink target or have children they must be
-        # rendered anyway
+        """
+        Link-target.
+
+        Targets are documented as 'invisible', but if they are a hyperlink target or have children they must be
+        rendered anyway.
+        """
         self.exit_nonbreakable_element()
         if node.rawsource.startswith(".. _"):
             self.append_possible_newline()
@@ -226,17 +260,17 @@ class RstTranslator(nodes.NodeVisitor):
     def depart_list_item(self, _node: nodes.list_item) -> None:
         self.indent_level -= 1
 
-    def visit_citation(self, node: nodes.citation) -> None:
+    def visit_citation(self, _node: nodes.citation) -> None:
         self.append_possible_newline()
-        self.append([f".."])
+        self.append([".."])
 
-    def depart_citation(self, node: nodes.citation) -> None:
+    def depart_citation(self, _node: nodes.citation) -> None:
         self.need_newline_before_paragraph_start = True
 
-    def visit_label(self, node: nodes.label) -> None:
+    def visit_label(self, _node: nodes.label) -> None:
         self.enter_nonbreakable_element()
 
-    def depart_label(self, node: nodes.label) -> None:
+    def depart_label(self, _node: nodes.label) -> None:
         text = self.exit_nonbreakable_element()
         self.append([f"[{text}]"])
 
@@ -248,8 +282,9 @@ class RstTranslator(nodes.NodeVisitor):
 
     def visit_DirectivePlaceholder(self, node: DirectivePlaceholder) -> None:
         self.append_possible_newline()
-        assert self.line_length == 0
-        self.append([f".. {node.name}::"] + node.arguments, newlines=1)
+        if self.line_length != 0:
+            raise RuntimeError("Directive found while indented.")
+        self.append([f".. {node.name}::", *node.arguments], newlines=1)
         self.indent_level += 1
         for key, value in sorted(node.options.items()):
             self.append([f":{key}:", value], newlines=1)
@@ -263,9 +298,9 @@ class RstTranslator(nodes.NodeVisitor):
     def depart_DirectivePlaceholder(self, _node: DirectivePlaceholder) -> None:
         self.indent_level -= 1
         self.need_newline_before_paragraph_start = True
-        # self.append(newlines=1)  # always a blank line after a directive
 
     def unknown_visit(self, node: nodes.Node) -> None:
+        """Reached a node that has no specific visitor."""
         if isinstance(node, self.ignored_nodes):
             return
 
@@ -273,33 +308,38 @@ class RstTranslator(nodes.NodeVisitor):
             self.enter_nonbreakable_element()
             return
 
-        print(f"Unknown visit {type(node)}")
+        raise RuntimeError(f"Unknown visit {type(node)}")
 
     def unknown_departure(self, node: nodes.Node) -> None:
+        """Leaving a node that has no specific visitor."""
         if isinstance(node, self.ignored_nodes):
             return
 
-        if type(node) in self.non_breakable_nodes:
+        if type(node) in self.non_breakable_nodes and isinstance(node, nodes.Element):
             self.exit_nonbreakable_element()
             self.append([node.rawsource])
             return
 
-        print(f"Unknown departure {type(node)}")
+        raise RuntimeError(f"Unknown departure {type(node)}")
 
 
 class RstFormattingWriter(writers.Writer):
+    """A docutils Writer that emits rst."""
+
     def __init__(self, config: RstFormatterConfig) -> None:
+        """Construct an RstFormattingWriter."""
         super().__init__()
         self.config = config
 
     def translate(self) -> None:
+        """Do the work."""
         self.visitor = visitor = RstTranslator(self.document, config=self.config)
         self.document.walkabout(visitor)
         self.output = "".join(visitor.output)
 
 
 def forgiving_parse_directive_block(
-    self: Body, indented: StringList, line_offset: int, _directive: type, _option_presets: dict
+    self: Body, indented: StringList, _line_offset: int, _directive: type, _option_presets: dict
 ) -> tuple[list[str], dict[str, str], StringList, int]:
     """Parse a directive without accessing the directive."""
     # indented[0] is the list of arguments after the directive name
@@ -328,7 +368,13 @@ def forgiving_parse_directive_block(
 
 @contextmanager
 def monkeypatch_directives_handler() -> Generator[None, Any, None]:
-    """Make sure that all directives in the rst are stored."""
+    """
+    Replace inner functions of docutils' rst parser to generate our own nodes.
+
+    We replace:
+    - The list of known directives ('_directives') with a dict-lookalike that always returns a DirectivePlaceHolder.
+    - The directive parse function with our own, so we don't need to know whether or not the directive has options.
+    """
 
     class MonkeyPatchedDirectiveHandler:
         def __contains__(self, key: str) -> bool:
@@ -353,6 +399,7 @@ def fix_heading_line_length(input_rst: str, config: RstFormatterConfig) -> str:
     Fix heading line length.
 
     Replace every line consisting 3-or-more heading-characters with exactly 4 heading characters.
+    This will make docutils' rst parser construct the correct node tree, so we can emit the correct output later.
     """
     chars = "".join(set("".join(config.title_order))).replace("^", "\\^").replace("-", "\\-")
     regex_str = r"^([CHARS]){3,}$".replace("CHARS", chars)
@@ -365,7 +412,7 @@ def format_rst(input_rst: str, config: RstFormatterConfig | None = None) -> str:
     if config is None:
         config = RstFormatterConfig()
 
-    if config.no_newline_bulletlist:
+    if not config.newline_bullet_list:
         input_rst = re.sub(r":\n(\s*[-*] )", r":\n\n\1", input_rst)
 
     # fix case of forgetting a newline before a directive
@@ -392,7 +439,9 @@ def format_rst(input_rst: str, config: RstFormatterConfig | None = None) -> str:
             settings_overrides=settings_overrides,
         )
 
-        print(doctree.pformat())
+        if config.print_node_tree:
+            print(doctree.pformat())
+
         writer = RstFormattingWriter(config)
         out = publish_from_doctree(
             doctree,
@@ -401,42 +450,44 @@ def format_rst(input_rst: str, config: RstFormatterConfig | None = None) -> str:
             settings_overrides=settings_overrides,
         )
 
-    if config.no_newline_bulletlist:
+    if not config.newline_bullet_list:
         out = re.sub(r":\n\n(\s*[-*] )", r":\n\1", out)
     return out.lstrip("\n").rstrip("\n")
 
 
-def main() -> int:
+def main(arguments: list[str] | None = None) -> int:
     """Entrypoint."""
     parser = argparse.ArgumentParser(description="Tool for formatting an rst file")
     parser.add_argument("input_file", type=Path, help="Input file to be processed")
     parser.add_argument("--check", "-c", action="store_true", help="Return 0 if no changes are needed")
     parser.add_argument("--diff", "-d", action="store_true", help="Perform a diff operation")
     parser.add_argument("--silent", "-s", action="store_true", help="Run in silent mode")
-    args = parser.parse_args()
+    RstFormatterConfig.prepare_argparse(parser)
+    args = parser.parse_args(arguments if arguments is not None else sys.argv[1:])
+    config = RstFormatterConfig.parse_argparse(args)
 
     rst_file = args.input_file
     content = rst_file.read_text()
-    out = format_rst(content)
+    out = format_rst(content, config)
 
-    def print_if_not_silent(arg: str) -> None:
+    def print_unless_silent(arg: str) -> None:
         if not args.silent:
             print(arg)
 
     if content == out:
-        print_if_not_silent("Nothing changed")
+        print_unless_silent("Nothing changed")
         return 0
 
     if args.diff:
         diff = list(unified_diff(content.splitlines(), out.splitlines(), lineterm=""))
-        print_if_not_silent("\n".join(diff))
+        print_unless_silent("\n".join(diff))
         return 1
 
     if not args.check:
-        print_if_not_silent(f"Writing changes to '{rst_file}'")
+        print_unless_silent(f"Writing changes to '{rst_file}'")
         rst_file.write_text(out)
     else:
-        print_if_not_silent("File changed (but file left unchanged)")
+        print_unless_silent("File needs changes (but file left unchanged)")
 
     return 1
 

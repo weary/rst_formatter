@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rst_formatter"
+version = "0.1.0"
+description = "A tool for formatting rst documents"
+keywords = ["rst", "formatter", "docutils"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "docutils",
+]
+
+[project.scripts]
+rst_formatter = "rst_formatter:main"
+
+[project.optional-dependencies]
+dev = [
+    "ipdb",
+    "mypy",
+    "rstcheck",
+    "ruff",
+    "typeguard",
+]
+test = [
+    "pytest-cov",
+]
+
+[tool.pytest.ini_options]
+addopts = "--cov --cov-report html --cov-report term-missing --cov-fail-under 95"
+
+[tool.coverage.run]
+source = ["src"]
