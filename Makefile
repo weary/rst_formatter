@@ -4,7 +4,7 @@ all: .venv/init
 .PHONY: clean format
 
 clean:
-	rm -rf .venv
+	rm -rf .venv .*_cache __pycache__
 	rm -rf build
 
 .venv/init:
