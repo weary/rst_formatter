@@ -416,7 +416,7 @@ def format_rst(input_rst: str, config: RstFormatterConfig | None = None) -> str:
         input_rst = re.sub(r":\n(\s*[-*] )", r":\n\n\1", input_rst)
 
     # fix case of forgetting a newline before a directive
-    input_rst = re.sub(r"([^\n])(\n.. )", r"\1\n\2", input_rst)
+    input_rst = re.sub(r"([^\n])(\n[.][.] )", r"\1\n\2", input_rst)
 
     input_rst = fix_heading_line_length(input_rst, config)
 
