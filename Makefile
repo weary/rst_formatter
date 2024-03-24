@@ -17,5 +17,5 @@ format: .venv/init
 	.venv/bin/rst_formatter --check testfile.rst
 
 test: .venv/init
-	.venv/bin/pytest .
+	(. .venv/bin/activate && pytest .)
 

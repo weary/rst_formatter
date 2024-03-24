@@ -333,11 +333,11 @@ def test_config_argparse() -> None:
     RstFormatterConfig.prepare_argparse(parser)
     args = parser.parse_args(
         """
---max_line_length=10
---no_line_break [a-z]+ b+
+--line-length=10
+--no-line-break [a-z]+ b+
 --titles # ^
---newline_after_title 3
---newline_bullet_list
+--newline-after-title 3
+--newline-bullet-list
 --print-parse-tree
 """.split()
     )

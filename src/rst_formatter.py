@@ -51,13 +51,13 @@ class RstFormatterConfig:
     @staticmethod
     def prepare_argparse(parser: argparse.ArgumentParser) -> None:
         """Add arguments corresponding to settings above."""
-        parser.add_argument("--max_line_length", type=int, default=120, help="Maximum line length")
+        parser.add_argument("--line-length", type=int, default=120, help="Maximum line length")
         parser.add_argument(
-            "--no_line_break", nargs="+", default=[r"~[^~]*~"], help="Regex patterns that should not be broken"
+            "--no-line-break", nargs="+", default=[r"~[^~]*~"], help="Regex patterns that should not be broken"
         )
         parser.add_argument("--titles", nargs="+", default=["==", "=", "-", "^"], help="Title formatting characters")
-        parser.add_argument("--newline_after_title", type=int, default=2, help="Add newline after major headings")
-        parser.add_argument("--newline_bullet_list", action="store_true", help='Add newline after ":" in a bullet list')
+        parser.add_argument("--newline-after-title", type=int, default=2, help="Add newline after major headings")
+        parser.add_argument("--newline-bullet-list", action="store_true", help='Add newline after ":" in a bullet list')
         parser.add_argument("--ruff", action="store_true", help="Filter directives containing 'python' through ruff")
         parser.add_argument("--print-parse-tree", action="store_true", help=argparse.SUPPRESS)
 
@@ -65,7 +65,7 @@ class RstFormatterConfig:
     def parse_argparse(args: argparse.Namespace) -> RstFormatterConfig:
         """Convert the parsed arguments to a RstFormatterConfig."""
         config = RstFormatterConfig()
-        config.max_line_length = args.max_line_length
+        config.max_line_length = args.line_length
         if args.no_line_break:
             config.no_line_break_regexes = [re.compile(pattern) for pattern in args.no_line_break]
         if args.titles:
