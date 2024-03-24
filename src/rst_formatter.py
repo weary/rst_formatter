@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -41,6 +42,9 @@ class RstFormatterConfig:
     # newline after ':' in a bullet list, rst specifies that a newline is needed before the first item
     newline_bullet_list: bool = False
 
+    # if a directive has a substring-match on the first entry, it is filtered through the external command
+    filter_directives: list[tuple[str, list[str]]] = field(default_factory=list)
+
     # for development, print the intermediate docutils node tree
     print_node_tree: bool = False
 
@@ -54,6 +58,7 @@ class RstFormatterConfig:
         parser.add_argument("--titles", nargs="+", default=["==", "=", "-", "^"], help="Title formatting characters")
         parser.add_argument("--newline_after_title", type=int, default=2, help="Add newline after major headings")
         parser.add_argument("--newline_bullet_list", action="store_true", help='Add newline after ":" in a bullet list')
+        parser.add_argument("--ruff", action="store_true", help="Filter directives containing 'python' through ruff")
         parser.add_argument("--print-parse-tree", action="store_true", help=argparse.SUPPRESS)
 
     @staticmethod
@@ -68,6 +73,8 @@ class RstFormatterConfig:
         config.newline_after_title = args.newline_after_title
         config.newline_bullet_list = args.newline_bullet_list
         config.print_node_tree = args.print_parse_tree
+        if args.ruff:
+            config.filter_directives.append(("python", ["ruff", "format", "-"]))
         return config
 
 
@@ -292,8 +299,11 @@ class RstTranslator(nodes.NodeVisitor):
         if node.options and node.content:
             self.append(newlines=1)
 
-        for line in node.content:
-            self.append([line], newlines=1)
+        if node.content:
+            content = "\n".join(node.content)
+            content = filter_directive_content(node.name, content, self.config)
+            for line in content.split("\n"):
+                self.append([line], newlines=1)
 
     def depart_DirectivePlaceholder(self, _node: DirectivePlaceholder) -> None:
         self.indent_level -= 1
@@ -405,6 +415,15 @@ def fix_heading_line_length(input_rst: str, config: RstFormatterConfig) -> str:
     regex_str = r"^([CHARS]){3,}$".replace("CHARS", chars)
     compiled_regex = re.compile(regex_str, flags=re.MULTILINE)
     return compiled_regex.sub(r"\1\1\1\1", input_rst)
+
+
+def filter_directive_content(directive_name: str, content: str, config: RstFormatterConfig) -> str:
+    """Check if a content-filter is specified in config and pass content through it."""
+    for directive_substring, cmdline in config.filter_directives:
+        if directive_substring in directive_name:
+            result = subprocess.run(cmdline, input=content, capture_output=True, check=True, encoding="utf-8")
+            content = result.stdout
+    return content.strip()
 
 
 def format_rst(input_rst: str, config: RstFormatterConfig | None = None) -> str:

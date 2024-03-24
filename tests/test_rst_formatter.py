@@ -287,8 +287,6 @@ def test_line_wrap() -> None:
     input_text = unbreakable * 2
     actual_text = format_rst(input_text)
     expected_text = f"{unbreakable} {unbreakable}"
-    print_with_line_numbers("input", input_text)
-    print_with_line_numbers("actual", actual_text)
     assert actual_text == expected_text
 
     config = RstFormatterConfig(max_line_length=40)
@@ -297,6 +295,36 @@ def test_line_wrap() -> None:
     lines = actual_text.split("\n")
     assert all(len(line) < config.max_line_length for line in lines)
     assert all(len(line) > config.max_line_length - len(unbreakable) for line in lines[:-1])
+
+
+def test_ruff_filter() -> None:
+    """Pass some python through ruff."""
+    config = RstFormatterConfig(filter_directives=[("python", ["ruff", "format", "-"])])
+    input_text = """
+.. my_python_directive::
+  print("hoi")
+""".strip()
+    actual_text = format_rst(input_text, config)
+    assert actual_text == input_text
+
+    input_text = """
+.. my_python_directive::
+  def frop(a:int)->None:
+    print(a)
+  a=3*4+2+x[4:5]
+  print(f'aap {a}')
+""".strip()
+    expected_text = """
+.. my_python_directive::
+  def frop(a: int) -> None:
+      print(a)
+
+
+  a = 3 * 4 + 2 + x[4:5]
+  print(f"aap {a}")
+""".strip()
+    actual_text = format_rst(input_text, config)
+    assert actual_text == expected_text
 
 
 def test_config_argparse() -> None:

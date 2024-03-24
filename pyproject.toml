@@ -29,6 +29,7 @@ dev = [
 ]
 test = [
     "pytest-cov",
+    "ruff",
 ]
 
 [tool.pytest.ini_options]
