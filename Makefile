@@ -1,5 +1,5 @@
 
-all: .venv/init
+all: format
 
 .PHONY: clean format
 
@@ -14,7 +14,7 @@ clean:
 	touch ./.venv/init
 
 format: .venv/init
-	.venv/bin/python rst_formatter.py
+	.venv/bin/rst_formatter --check testfile.rst
 
 test: .venv/init
 	.venv/bin/pytest .
